@@ -1,22 +1,16 @@
 # --- IMPORTS ---
 import streamlit as st
-import psycopg2
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
-# Set page configuration
+# --- PAGE CONFIG ---
 st.set_page_config(page_title="Retail Web App", page_icon="🛒")
 
-# --- DATABASE CONNECTION ---
-def create_connection():
-    return psycopg2.connect(
-        host="localhost",
-        port=5432,
-        dbname="retail_data",
-        user="postgres",
-        password="Retail123!"
-    )
+# --- CSV DATA LOADING ---
+transactions = pd.read_csv('400_transactions_small.csv')
+households = pd.read_csv('400_households.csv')
+products = pd.read_csv('400_products.csv')
 
 # --- LOGIN PAGE ---
 if 'logged_in' not in st.session_state:
@@ -44,42 +38,31 @@ if st.session_state['logged_in']:
     hshd_num = st.text_input("Enter Household Number (HSHD_NUM):")
     if hshd_num:
         try:
-            conn = create_connection()
-            query = """
-            SELECT t.basket_num, t.purchase_date, t.product_num, p.department, p.commodity, t.spend, t.units
-            FROM transactions t
-            JOIN products p ON t.product_num = p.product_num
-            WHERE t.hshd_num = %s
-            ORDER BY t.purchase_date;
-            """
-            df = pd.read_sql(query, conn, params=(hshd_num,))
-            conn.close()
+            hshd_data = transactions[transactions['hshd_num'] == int(hshd_num)]
+            merged = hshd_data.merge(products, on='product_num', how='left')
 
-            if df.empty:
+            if merged.empty:
                 st.warning(f"No transactions found for Household {hshd_num}.")
             else:
-                st.success(f"Found {len(df)} transactions!")
-                st.dataframe(df)
+                st.success(f"Found {len(merged)} transactions!")
+                st.dataframe(merged)
 
                 st.subheader("📊 Summary Statistics")
-                st.write(f"Total Spend: ${df['spend'].sum():.2f}")
-                st.write(f"Total Items Purchased: {df['units'].sum()} units")
+                st.write(f"Total Spend: ${merged['spend'].sum():.2f}")
+                st.write(f"Total Items Purchased: {merged['units'].sum()} units")
 
                 st.subheader("🛒 Spend by Department")
-                st.bar_chart(df.groupby('department')['spend'].sum())
+                st.bar_chart(merged.groupby('department')['spend'].sum())
 
         except Exception as e:
             st.error(f"Error fetching data: {e}")
 
     # --- MACHINE LEARNING SECTION ---
-
     st.header("🧠 Basket Analysis")
 
     if st.button("Run Basket Analysis", key="basket_button"):
         try:
-            conn = create_connection()
-            df_basket = pd.read_sql("SELECT basket_num, product_num FROM transactions LIMIT 5000", conn)
-            conn.close()
+            df_basket = transactions[['basket_num', 'product_num']]
 
             basket = df_basket.pivot_table(index='basket_num', columns='product_num', aggfunc=lambda x: 1, fill_value=0)
 
@@ -109,10 +92,8 @@ if st.session_state['logged_in']:
 
     if st.button("Run Churn Prediction", key="churn_button"):
         try:
-            conn = create_connection()
-            df_households = pd.read_sql("SELECT * FROM households", conn)
-            df_transactions = pd.read_sql("SELECT hshd_num, spend FROM transactions", conn)
-            conn.close()
+            df_transactions = transactions.copy()
+            df_households = households.copy()
 
             total_spend = df_transactions.groupby('hshd_num')['spend'].sum().reset_index()
             total_spend.rename(columns={'spend': 'total_spend'}, inplace=True)
@@ -120,10 +101,8 @@ if st.session_state['logged_in']:
             df_merged = pd.merge(df_households, total_spend, how='left', on='hshd_num')
             df_merged['total_spend'].fillna(0, inplace=True)
 
-            # Define churn: customers who spent < 500 are at risk
             df_merged['churn'] = df_merged['total_spend'].apply(lambda x: 1 if x < 500 else 0)
 
-            # Use only available features
             available_features = ['age_range', 'marital_status', 'income_range', 'homeowner_desc', 'total_spend']
             existing_features = [f for f in available_features if f in df_merged.columns]
 
@@ -150,4 +129,3 @@ if st.session_state['logged_in']:
 
 else:
     st.warning("🔒 Please login to continue.")
-
